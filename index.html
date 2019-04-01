@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>五子棋</title>
+	<style type="text/css">
+		*{
+			margin:0;
+			padding:0;
+			font-family: microsoft yahei
+		}
+		.gobang{
+			width:642px;
+			height:642px;
+			background: url(picture/bak.jpg);
+			text-align: center; 
+			margin: auto;
+			position: absolute;
+			top: 0;
+			left: 0;
+			right: 0;
+			bottom: 0;
+		}
+		#can{
+			margin:0px auto;
+			border:1px solid green;
+			display: block;
+		}
+	</style>
+	<script src="http://cdn.bootcss.com/jquery/1.12.3/jquery.min.js"></script>
+	<script src="layer/layer.js"></script>
+</head>
+<body>
+<div class="gobang">
+	
+	<canvas id="can" width="640" height="640">
+		您的浏览器不支持canvas
+	</canvas>
+</div>
+<script>
+	var text = document.getElementsByClassName('text');	
+	var lines = 16;
+	var isGameOver = false;
+	//定义二维数组作为棋盘
+	var maps = new Array(lines);
+	var len = maps.length;
+	// alert(len)
+	for(var i=0;i<len;i++){
+		maps[i] = new Array();
+		for(var j = 0;j<len;j++){
+			maps[i][j] = 0;
+			// console.log(maps[i][j]);
+		}
+	}
+
+	//初始化棋子
+	var black = new Image();
+	var white = new Image();
+	var clientWidth = document.documentElement.clientWidth;
+	black.src = "picture/black.png";
+	white.src = "picture/white.png";
+	//棋盘初始化
+	var can = document.getElementById('can');
+	var ctx = can.getContext("2d");  //获取该canvas的2D绘图环境对象
+	ctx.strokeStyle = "#333";
+	
+	initBoard();
+	var isBlack = true;
+	var ai = new AI();
+	//清空棋盘
+	function initBoard(){
+		ctx.clearRect(0,0,can.width,can.height);
+		for(var m=0;m<len-1;m++){
+			for(var n=0;n<len-1;n++){
+				ctx.strokeRect(m*40+20,n*40+20,40,40);  //绘制40的小正方形
+				maps[m][n]=0
+			}
+		}
+	}
+	//下子
+	can.onclick=function play(e){
+		//获取点击相对棋盘坐标
+		var bbox = can.getBoundingClientRect();
+        var x =  e.clientX - bbox.left * (can.width/bbox.width) - 20;
+        var y = e.clientY - bbox.top * (can.height/bbox.height) - 20;
+		var row,col,index = 0;
+		if(x%40 < 20){
+			col = parseInt(x/40);
+		}else{
+			col = parseInt(x/40)+1;
+		}
+		row = y%40<20 ? parseInt(y/40) : parseInt(y/40)+1;
+		// alert(row+"行"+col+"行");  //第几列行第几列
+		if(isGameOver){
+			isGameOver = false;
+			initBoard();
+			return;
+		}
+		if(maps[row][col]===0){
+			if(isBlack){
+				ctx.drawImage(black,col*40,row*40);   //下黑子
+				isBlack = false;
+				maps[row][col] = 1; //黑子为1
+				iswin(1,row,col);
+				
+				//电脑下白子
+				if(!isGameOver){
+					var p = ai.AIGo(maps,2);
+					ctx.drawImage(white,p.y*40,p.x*40);
+					isBlack = true;
+					maps[p.x][p.y] = 2; //白子为2
+					iswin(2,p.x,p.y);
+				}
+			}
+			/*else{
+				ctx.drawImage(white,col*40,row*40);
+				isBlack = true;
+				maps[row][col] = 1; //白子为2
+				iswin(1,row,col);
+			}*/
+		}
+		//判断胜负
+		function iswin(t,row,col){
+				if(isFive(row,col)){
+					if(t==2){
+						layer.alert('白子赢');
+					}else{
+						layer.alert('黑子赢');
+					}
+					isGameOver = true;
+				}
+		}
+		//判断落子点四条线，是否有5子连线的
+		function isFive(row,col){
+			 return (
+			 sameLine(1, 0, row,col) > 4 ||
+			 sameLine(0, 1, row,col) > 4 || 
+			 sameLine(1, 1, row,col) > 4 || 
+			 sameLine(-1, 1,row,col) > 4 );
+		}
+		//获取一条线多少个同色子
+		function sameLine(x,y,row,col){
+			var same = 0;
+			var i = row;
+			var j = col;
+			do{
+				if(maps[i][j] != maps[row][col]) break;
+				i += x;
+				j += y;
+			}while (!(i < 0 || i > 15 || j < 0 || j > 15)); 
+			same = Math.max(Math.abs(row - i),Math.abs(col - j));
+			i = row;
+			j = col;
+			do{
+				if(maps[i][j] != maps[row][col]) break;
+				i -= x;
+				j -= y;
+			}while (!(i < 0 || i > 15 || j < 0 || j > 15));
+			same = same - 1 + Math.max(Math.abs(row - i),Math.abs(col - j));
+			return same;
+		}
+	}
+	/*棋子对象*/
+	function Chess(x,y,color,index){
+		this.x=x;
+		this.y=y;
+		this.color=color;
+		this.index=index;
+	}
+	
+	/*AI对象*/
+	function AI(){
+		//常量权重
+		var STEP_KILL = 99999;
+		var STEP_DANGER = 99998;
+		var STEP_FOUR = 88888;
+		var STEP_SLAY = 77777;
+		var STEP_AT_FOUR = 44444;
+		//复制棋盘，用来模拟
+		var chessMap;
+		var chessCopy;
+		//己方权重和敌方权重
+		var ownWeight = new Array(lines);
+		var oppositeWeight = new Array(lines);
+		for(var i=0;i<len;i++){
+			ownWeight[i] = new Array();
+			oppositeWeight[i] = new Array();
+			for(var j = 0;j<len;j++){
+				ownWeight[i][j] = 0;
+				oppositeWeight[i][j] = 0;
+			}
+		}
+		// 电脑要走的棋子颜色 黑1 或 白2 ,0为空
+		var computerColor = 0;
+		//落子数量
+		var chessCount = 0;
+		/*AI下棋*/
+		this.AIGo = function(map,color){
+			chessMap = map;
+			computerColor = color;
+			calculateWeight(); // 计算权重
+			var point = new Chess(-1,-1,color,0);
+			var x1 = -1, y1 = -1; //己方最大权重记录坐标
+			var x2 = -1, y2 = -1; //对方最大权重记录坐标
+			var x3 = -1, y3 = -1; //双方权重合值最大记录坐标
+			var ownMax = 0; // 己方最大权重
+			var oppositeMax = 0; // 对方最大权重
+			var oppositeMin = 0; // 对方最小权重
+			var sumMax = 0;//双方合起来的权重
+			/*开始分析所有权重*/
+			for (var i = 0; i < len; i++) {
+				for (var j = 0; j < len; j++) {
+					/*处理己方权重*/
+					if (ownMax < ownWeight[i][j]) {
+						ownMax = ownWeight[i][j]; // 获取己方最大权重
+						x1 = i; // 获取坐标
+						y1 = j;
+					} else if (ownMax == ownWeight[i][j]) {
+						if (Math.random() * 100 > 50) { //权重相同加点随机事件
+							ownMax = ownWeight[i][j]; // 获取己方最大权重
+							x1 = i; // 获取坐标
+							y1 = j;
+						}
+					}
+					//己方已经四连，直接落子
+					if (ownMax == STEP_KILL || ownMax == STEP_DANGER) {
+						point.x = x1;
+						point.y = y1;
+						point.index = ownMax;
+						return point;
+					}
+					/*处理对方权重*/
+					if (oppositeMax < oppositeWeight[i][j]) {
+						oppositeMax = oppositeWeight[i][j]; // 获取对方最大权重
+						x2 = i; // 获取坐标
+						y2 = j;
+					} else if (oppositeMax == oppositeWeight[i][j]) {
+						if (Math.random() * 100 > 50) { //权重相同加点随机事件
+							oppositeMax = oppositeWeight[i][j]; // 获取对方最大权重
+							x2 = i; // 获取坐标
+							y2 = j;
+						}
+					}
+					//最小权重，负的，对面已经有的形式判断
+					if (oppositeMin > oppositeWeight[i][j]) {
+						oppositeMin = oppositeWeight[i][j];
+					}
+					/*处理双方权重相加*/
+					if (sumMax < ownWeight[i][j] + oppositeWeight[i][j]) {  //两边总权重
+						sumMax = ownWeight[i][j] + oppositeWeight[i][j];
+						x3 = i;
+						y3 = j;
+					} else if (sumMax == ownWeight[i][j] + oppositeWeight[i][j]) {
+						if (Math.random() * 100 > 50) { //权重相同加点随机事件
+							sumMax = ownWeight[i][j] + oppositeWeight[i][j];
+							x3 = i;
+							y3 = j;
+						}
+					}
+				}
+			}
+			if (ownMax < 10 && oppositeMax < 10) return point;//和棋
+			/*开始根据权重分析形势*/
+			//对方将要5连但是可以拦截
+			if (oppositeMax == STEP_DANGER) {
+				point.x = x2;
+				point.y = y2;
+				point.index = -oppositeMax;
+				return point;
+			}
+			//己方将活四
+			if (ownMax == STEP_FOUR) {
+				point.x = x1;
+				point.y = y1;
+				point.index = ownMax;
+				return point;
+			}
+			//对方已经双线成杀，不拦截，全力冲四跳四
+			if (oppositeMin == -STEP_SLAY) {
+				for (var i = 0; i < len; i++) {
+					for (var j = 0; j < len; j++) {
+						ownWeight[i][j] = weightSum(i, j, computerColor, true);
+						if (ownWeight[i][j] == STEP_AT_FOUR) {
+							point.x = i;
+							point.y = j;
+							point.index = ownWeight[i][j];
+							return point;
+						}
+					}
+				}
+			}
+			//己方将要双线成杀
+			if (ownMax == STEP_SLAY) {
+				point.x = x1;
+				point.y = y1;
+				point.index = ownMax;
+				return point;
+			}
+			//对面将活四 或 将双线成杀
+			if (oppositeMax == STEP_FOUR ||
+					oppositeMax == STEP_SLAY) {
+				point.x = x2;
+				point.y = y2;
+				point.index = -oppositeMax;
+				return point;
+			}
+			
+			//剩下走双方权重相合最大的点
+			point.x = x3;
+			point.y = y3;
+			point.index = sumMax;
+			return point;
+		}
+		
+		
+		/*复制棋盘*/
+		function copyChessMaps(){
+			var copyMaps = new Array(lines);
+			for(var i=0;i<len;i++){
+				copyMaps[i] = new Array();
+				for(var j = 0;j<len;j++){
+					copyMaps[i][j] = chessMap[i][j];
+				}
+			}
+			return copyMaps;
+		};
+		
+		/*获取双方所有坐标的权重*/
+		function calculateWeight() {
+			for (var i = 0; i < len; i++) {
+				for (var j = 0; j < len; j++) {
+					ownWeight[i][j] = weightSum(i, j, computerColor, false);
+					oppositeWeight[i][j] = weightSum(i, j, 3 - computerColor, false);
+				}
+			}
+		}
+
+		/*分析一个点所能形成的局势，用权重表示*/
+		function weightSum( x,  y,  color, ignoreFour) {
+			var weight = 0; // 总权重
+			// 如果坐标处有子，则没有权重,如果是对面权重计算需要判断已有局面
+			if (chessMap[x][y] > 0) {
+				if (color == computerColor) chessCount++;
+				if (color == computerColor ||
+						chessMap[x][y] == computerColor) {
+					return -1;
+				}
+			}
+			/*获取 横竖 阳线，左斜线 右斜线 阴线 四线权重*/
+			var line = new Array(4);
+			line[0] = singleLine(x, y, color, 1, 0);
+			line[1] = singleLine(x, y, color, 0, 1);
+			line[2] = singleLine(x, y, color, 1, 1);
+			line[3] = singleLine(x, y, color, -1, 1);
+			var doubleLine = 0; //成双线杀的条件，大于等于2表示成杀
+			var four = 0;//活四及以上或跳四及以上个数
+			var op = chessMap[x][y] > 0 ? -1 : 1;//已有子的坐标系数为-1
+			for (var i = 0; i < line.length; i++) {
+				var life = line[i] / 1000;
+				var side = line[i] / 100 % 10;
+				var jump = line[i] % 100;
+				//活5
+				if (life > 4) {
+					weight = STEP_KILL;
+					//冲5或跳5
+					if (side > 4 || jump % 10 > 4) {
+						weight = STEP_DANGER;
+					}
+					return weight * op;
+				}
+				//活4
+				if (life == 4) {
+					weight = STEP_FOUR;
+					return weight * op;
+				}
+				//活三，冲四 ，跳四及以上，活跳三
+				if (life == 3 || side == 4 || jump % 10 >= 4 ||
+						(jump / 10 == 0 && jump % 10 == 3)) {
+					doubleLine++; //满足双杀条件
+					if (jump % 10 >= 3) { //跳权重少点
+						weight += 8000;
+					} else {
+						weight += 10000;
+					}
+					//冲四跳四
+					if (side >= 4 || jump % 10 >= 4) {
+						four++;
+					}
+					//活二，冲三，冲跳三
+				} else if (life == 2 || side == 3 || jump % 10 == 3) {
+					weight += 1000;
+					//余下权重计算
+				} else {
+					weight = weight + life * 100 + side * 100 +
+							(jump % 10) * 10 - (jump / 10);
+					//中心点权重加100，AI开局就不会乱走
+					if (x == 7 && y == 7) {
+						weight += 100;
+					}
+				}
+			}
+			if (doubleLine > 1) {
+				weight = STEP_SLAY;//双线成杀
+			} else if (doubleLine == 1 && four > 0 && ignoreFour) {
+				weight = STEP_AT_FOUR;// 冲四或跳四
+			}
+			return weight * op;
+		}
+
+		/*单线权重计算*/
+		function singleLine( x,  y,  color,  px,  py) {
+			var leftLive = oneSide(x, y, color, px, py, 0); //左边生存空间
+			var rightLive = oneSide(x, y, color, -px, -py, 0); //右边生存空间
+			if (leftLive + rightLive < 4) return 1;//左右生存空间少于4，此线无意义；
+			var leftSame = oneSide(x, y, color, px, py, 1); //左边相邻连续同色
+			var rightSame = oneSide(x, y, color, -px, -py, 1); //右边相邻连续同色
+			var leftNSame = oneSide(x, y, color, px, py, 2); //左边不相邻（1个空位）连续同色
+			var rightNSame = oneSide(x, y, color, -px, -py, 2); //右边不相邻（1个空位）连续同色
+			var life = isLife(leftLive, leftSame, rightLive, rightSame);
+			var side = isSide(leftLive, leftSame, rightLive, rightSame);
+			var jump = isJump(leftLive, leftSame, leftNSame, rightLive, rightSame, rightNSame);
+			return life * 1000 + side * 100 + jump; //千位为活子数，百位冲子数，十为标识个位的跳是否一边被拦
+		}
+
+		/*判断活几*/
+		function isLife( ll,  ls,  rl,  rs) {
+			var num = ls + rs + 1;
+			if (num > 4 || (ll > ls && rl > rs)) {
+				return num;
+			}
+			return 0;
+		}
+
+		/*判断冲几*/
+		function isSide( ll,  ls,  rl, rs) {
+			if (ll == ls ^ rl == rs) {
+				return ls + rs + 1;
+			}
+			return 0;
+		}
+
+		/*判断跳几*/
+		function isJump( ll,  ls,  lns,  rl,  rs,  rns) {
+			var sum = ls + rs + 1;
+			var lj = sum + lns - ls;
+			var rj = sum + rns - rs;
+			lj = lj == sum ? 0 : lj; //分开活,冲和跳
+			rj = rj == sum ? 0 : rj;
+			var num = (lj > rj ? lj : rj);
+			if (num >= 4) return num; //跳四以上不考虑冲
+			if (num < 2) return 0; //跳2以下无意义
+			var l_side = 0, r_side = 0;
+			if ((lns + 1 >= ll) ^ (rl == rs)) {
+				l_side = 1;//左冲
+			}
+			if ((rns + 1 >= rl) ^ (ll == ls)) {
+				r_side = 1; //右冲
+			}
+			if (lj == num && l_side == 0) {
+				return num;//活跳
+			}
+			if (rj == num && r_side == 0) {
+				return num;//活跳
+			}
+			return 10 + num;//冲跳，十位标识有障碍形成冲
+		}
+
+		/*单线参数获取*/
+		function oneSide( x,  y,  color,  px,  py,  mode) {
+			var num = 0, space = 0;
+			while (!(x + px < 0 || x + px > 15 ||
+					y + py < 0 || y + py > 15)) {
+				x += px;
+				y += py;
+				if (chessMap[x][y] == 3 - color) break;
+				if (mode == 1 && chessMap[x][y] != color) break;
+				if (mode == 2 && chessMap[x][y] == 0) {
+					space++;
+					if (space > 1) break;
+					continue;
+				}
+				num++;
+			}
+			return num;
+		}
+		
+	}
+</script>
+</body>
+</html>
